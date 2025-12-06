@@ -1,7 +1,7 @@
 import matplotlib.pyplot as plt
 import os
 
-def save_rd_curve(results, title, filename, output_dir="project_JH"):
+def save_rd_curve(results, title, filename, output_dir="results"):
     """
     Plots and saves Rate-Distortion curves for PSNR and SSIM.
     results: dict with 'bpp', 'psnr', 'ssim' lists.

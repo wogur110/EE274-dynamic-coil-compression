@@ -21,17 +21,21 @@ def main():
     # 2. JPEG
     run_script(os.path.join("scripts", "refer1a_jpeg_compression.py"))
     
-    # 3. DCT Compression (New Phase 1B variant)
-    run_script(os.path.join("scripts", "refer1b_DCT_compression.py"))
+    # 3. DCT Uniform Compression
+    run_script(os.path.join("scripts", "refer1b_DCT_uniform_compression.py"))
     
-    # 4. FFT Compression (Undersampling / VD Poisson)
-    run_script(os.path.join("scripts", "refer1c_FFT_compression.py"))
-    
-    # 5. Uniform Coil Compression (PCA)
+    # 4. Uniform Coil Compression (PCA)
     run_script(os.path.join("scripts", "uniform_coil_compression.py"))
     
-    # # 6. Dynamic Coil Compression
-    # run_script(os.path.join("scripts", "dynamic_coil_compression.py"))
+    # 5. Dynamic Coil Compression (regular)
+    run_script(os.path.join("scripts", "dynamic_coil_compression.py"))
+    run_script(os.path.join("scripts", "find_optimal_hyperparameters_for_dcc.py"))
+    run_script(os.path.join("scripts", "run_optimal_dynamic_compression.py"))
+
+    # 6. Dynamic Coil Compression (waterfilling)
+    run_script(os.path.join("scripts", "dynamic_coil_compression_waterfilling.py"))
+    run_script(os.path.join("scripts", "find_optimal_hyperparameters_for_dcc.py") + " --waterfilling")
+    run_script(os.path.join("scripts", "run_optimal_dynamic_compression.py") + " --waterfilling")
     
     print("\nAll experiments completed.")
 

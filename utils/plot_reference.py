@@ -26,7 +26,7 @@ def plot_results():
 
     # Plot Reference Image (Magnitude Only)
     plt.figure(figsize=(6, 5))
-    plt.imshow(np.abs(ref_img), cmap='gray')
+    plt.imshow(np.flipud(np.abs(ref_img).T), cmap='gray')
     plt.title("Reference Image (Magnitude)")
     plt.axis('off')
     plt.colorbar(fraction=0.046, pad=0.04)
@@ -44,7 +44,7 @@ def plot_results():
     plt.figure(figsize=(16, 4 * rows))
     for i in range(num_coils_to_plot):
         plt.subplot(rows, cols, i + 1)
-        plt.imshow(np.abs(maps[i]), cmap='gray')
+        plt.imshow(np.flipud(np.abs(maps[i]).T), cmap='gray')
         plt.title(f"Coil {i} Mag")
         plt.axis('off')
         

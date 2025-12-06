@@ -60,7 +60,14 @@ def mse_loss(x, y):
 def psnr(x, y, max_val=None):
     # Compute PSNR on magnitude images
     if max_val is None:
-        max_val = np.max(np.abs(y))
+        # For normalized images (magnitude in [0, 1]), use 1.0 as max_val
+        # Otherwise use the actual maximum of the reference
+        ref_max = np.max(np.abs(y))
+        # If reference is normalized (max close to 1.0), use 1.0 for consistency
+        if np.isclose(ref_max, 1.0, atol=1e-3):
+            max_val = 1.0
+        else:
+            max_val = ref_max
     mse = mse_loss(x, y)
     if mse == 0:
         return float('inf')
@@ -108,8 +115,8 @@ def run_espirit_pipeline(reconstructed_coils_np: np.ndarray,
     """
     # Import locally to avoid circular imports if any, or just proper import
     # Using relative import or absolute package import
-    # Since this file is in project_JH/utils, we need to import espirit_torch from same dir
-    from project_JH.utils.espirit_torch import csm_from_espirit
+    # Since this file is in utils/, we need to import espirit_torch from same dir
+    from utils.espirit_torch import csm_from_espirit
     
     # 1. FFT to k-space
     rec_ksp = sp.fft(reconstructed_coils_np, axes=(-2, -1))
@@ -149,54 +156,6 @@ def run_espirit_pipeline(reconstructed_coils_np: np.ndarray,
     
     return p, s
 
-def quantize_and_encode(coeffs, bits=8):
-    """
-    Uniform quantization and zlib compression.
-    """
-    real = coeffs.real
-    imag = coeffs.imag
-    
-    min_r, max_r = real.min(), real.max()
-    min_i, max_i = imag.min(), imag.max()
-    
-    levels = 2**bits - 1
-    
-    def quant_stream(x, mn, mx):
-        if mx == mn:
-            return np.zeros_like(x, dtype=np.uint8 if bits<=8 else np.uint16), 0
-        scale = levels / (mx - mn)
-        q = np.round((x - mn) * scale)
-        q = np.clip(q, 0, levels)
-        if bits <= 8:
-            return q.astype(np.uint8), 0
-        elif bits <= 16:
-            return q.astype(np.uint16), 0
-        return q.astype(np.uint32), 0
-        
-    q_real, _ = quant_stream(real, min_r, max_r)
-    q_imag, _ = quant_stream(imag, min_i, max_i)
-    
-    b_real = q_real.tobytes()
-    b_imag = q_imag.tobytes()
-    
-    c_real = zlib.compress(b_real)
-    c_imag = zlib.compress(b_imag)
-    
-    # Bits = compressed size * 8 + overhead (min/max floats)
-    bits_used = (len(c_real) + len(c_imag)) * 8 + 4 * 32
-    
-    # Dequantize (Simulation)
-    def dequant(q, mn, mx):
-        if mx == mn:
-            return np.full(q.shape, mn)
-        scale = (mx - mn) / levels
-        return q.astype(np.float32) * scale + mn
-        
-    rec_real = dequant(q_real, min_r, max_r)
-    rec_imag = dequant(q_imag, min_i, max_i)
-    
-    return rec_real + 1j * rec_imag, bits_used
-
 def get_poisson_mask(shape, accel, calib=(32, 32), seed=0):
     """
     Generates a Poisson disc mask.
@@ -205,8 +164,11 @@ def get_poisson_mask(shape, accel, calib=(32, 32), seed=0):
         spatial_shape = shape[-2:]
     else:
         spatial_shape = shape
-        
-    mask = sigpy.mri.poisson(spatial_shape, accel, calib=calib, dtype=np.float32, seed=seed)
+    
+    if accel == 1 :
+        mask = np.ones(spatial_shape)
+    else :  
+        mask = sigpy.mri.poisson(spatial_shape, accel, calib=calib, dtype=np.float32, seed=seed)
     
     if len(shape) == 3:
         mask = mask[None, ...]

@@ -4,7 +4,7 @@ import sigpy as sp
 import os
 import sys
 import matplotlib.pyplot as plt
-import zlib
+from scipy.fft import dctn, idctn
 
 # Add parent directory to path (go up 1 level from scripts/ to EE274-dynamic-coil-compression/)
 script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -17,15 +17,13 @@ from utils.mri_utils import (
     run_espirit_pipeline,
     DATA_DIR,
     normalize_complex_image,
-    get_device,
-    crop_center,
     get_poisson_mask,
 )
 from utils.plot_utils import save_rd_curve
-from utils.espirit_torch import csm_from_espirit
+import zlib
 
 def quantize_and_encode(coeffs, bits=8):
-    """
+    """ 
     Uniform quantization and zlib compression.
     """
     real = coeffs.real
@@ -72,99 +70,70 @@ def quantize_and_encode(coeffs, bits=8):
     
     return rec_real + 1j * rec_imag, bits_used
 
-def simple_coil_compression(kspace_data, n_virtual_coils, calib_size=32):
+def dct_compress_decompress(kspace, keep_ratio, quant_bits=8):
     """
-    Coil compression using calibration data in k-space.
-    kspace_data: shape (N_coils, H, W) or (N_coils, H, W) - k-space data
-    n_virtual_coils: integer, number of coils to keep
-    calib_size: size of calibration region (default 32x32)
-    Returns: compressed k-space (n_virtual_coils, H, W)
+    Per-coil 2D DCT compression on k-space data with magnitude thresholding.
+    kspace: (N, H, W) complex - k-space data (already undersampled)
+    keep_ratio: float (0 to 1), fraction of coefficients to keep (largest magnitude).
     """
-    N_coils, H, W = kspace_data.shape
-    
-    # 1. Extract calibration data (center 32x32 region)
-    calib_h = calib_size
-    calib_w = calib_size
-    cy, cx = H // 2, W // 2
-    sy = cy - calib_h // 2
-    sx = cx - calib_w // 2
-    
-    calib_data = kspace_data[:, sy:sy+calib_h, sx:sx+calib_w]  # (N_coils, calib_h, calib_w)
-    
-    # 2. Reshape calibration data to [Samples, Coils]
-    flat_calib = calib_data.reshape(N_coils, -1).T  # (calib_h * calib_w, N_coils)
-    
-    # 3. Compute Covariance Matrix (Coil x Coil)
-    # Using specific numpy notation for conjugate transpose (.conj().T)
-    covariance = flat_calib.T.conj() @ flat_calib  # (N_coils, N_coils)
-    
-    # 4. Eigen decomposition using SVD (more numerically stable)
-    # U: Unitary arrays (eigenvectors), S: Singular values
-    U, S, Vh = np.linalg.svd(covariance)
-    
-    # 5. Select top K components (Columns of U)
-    compression_matrix = U[:, :n_virtual_coils]  # (N_coils, n_virtual_coils)
-    
-    # 6. Apply compression to full k-space
-    # Reshape full k-space to [Samples, Coils]
-    flat_kspace = kspace_data.reshape(N_coils, -1).T  # (H * W, N_coils)
-    
-    # (Samples x Physical) @ (Physical x Virtual) -> (Samples x Virtual)
-    compressed_flat = flat_kspace @ compression_matrix  # (H * W, n_virtual_coils)
-    
-    # Reshape back to k-space dimensions
-    compressed_kspace = compressed_flat.T.reshape(n_virtual_coils, H, W)
-    
-    return compressed_kspace, compression_matrix
-
-def pca_compress_decompress(imgs, K_pca, quant_bits=8, calib_size=32, kspace_undersampled=None):
-    """
-    PCA compression using k-space calibration data.
-    imgs: (N, H, W) complex - image domain data (used if kspace_undersampled is None)
-    kspace_undersampled: (N, H, W) complex - optional pre-computed undersampled k-space
-    K_pca: Number of virtual coils to keep
-    quant_bits: quantization bits
-    calib_size: calibration region size (default 32x32)
-    Returns: compressed coil images (K_pca, H, W) and total bits
-    """
-    if kspace_undersampled is None:
-        # Convert to k-space
-        kspace = sp.fft(imgs, axes=(-2, -1))  # (N, H, W)
-    else:
-        kspace = kspace_undersampled
-    
     N, H, W = kspace.shape
+    num_coeffs = N * H * W
     
-    # 1. Coil compression using calibration data
-    compressed_kspace, compression_matrix = simple_coil_compression(
-        kspace, K_pca, calib_size=calib_size
-    )
-    # compressed_kspace: (K_pca, H, W)
+    # 1. Separate Real and Imaginary
+    real = kspace.real
+    imag = kspace.imag
     
-    # 3. Quantize compressed k-space
-    compressed_kspace_quantized, bits_coeffs = quantize_and_encode(
-        compressed_kspace, bits=quant_bits
-    )
+    # 2. 2D DCT on k-space (orthonormal DCT type 2)
+    dct_real = dctn(real, axes=(-2, -1), norm='ortho')
+    dct_imag = dctn(imag, axes=(-2, -1), norm='ortho')
     
-    # 4. Overhead for compression matrix (N * K_pca complex floats, 32 bits each)
-    bits_basis = N * K_pca * 2 * 4 * 8
+    # 3. Thresholding
+    # Compute magnitude and keep top coefficients globally across all coils/real/imag
+    # Combine coeffs for sorting
+    all_coeffs = np.concatenate([dct_real.flatten(), dct_imag.flatten()])
+    abs_coeffs = np.abs(all_coeffs)
     
-    total_bits = bits_coeffs + bits_basis
+    # Determine threshold
+    k = int(len(all_coeffs) * keep_ratio)
+    if k == 0:
+        threshold = np.inf
+    elif k == len(all_coeffs):
+        threshold = -1.0
+    else:
+        partitioned = np.partition(abs_coeffs, -k)
+        threshold = partitioned[-k]
+        
+    # Masking
+    mask_real = np.abs(dct_real) >= threshold
+    mask_imag = np.abs(dct_imag) >= threshold
     
-    # 5. Convert compressed k-space back to image domain
-    imgs_rec = sp.ifft(compressed_kspace_quantized, axes=(-2, -1))  # (K_pca, H, W)
+    # Keep coefficients
+    dct_real_kept = dct_real * mask_real
+    dct_imag_kept = dct_imag * mask_imag
     
-    return imgs_rec, total_bits
+    # 4. Quantize and Encode
+    # Combine into complex for quantizer (handles real/imag separation)
+    coeffs_kept = dct_real_kept + 1j * dct_imag_kept
+    
+    # quantize_and_encode separates real/imag and zlib compresses them
+    rec_coeffs, bits = quantize_and_encode(coeffs_kept, bits=quant_bits)
+    
+    # 5. Inverse DCT
+    rec_real = idctn(rec_coeffs.real, axes=(-2, -1), norm='ortho')
+    rec_imag = idctn(rec_coeffs.imag, axes=(-2, -1), norm='ortho')
+    
+    rec_kspace = rec_real + 1j * rec_imag
+    
+    return rec_kspace, bits
 
-def run_pca_experiment():
+def run_dct_experiment():
     imgs = load_imgs()
     ref_img_path = os.path.join("results", "refer0", "ref_image.pt")
-    print(f"Loading reference from {ref_img_path}...")
     try:
         ref_img = torch.load(ref_img_path).numpy()
     except:
-         print("Reference image not found.")
-         return
+        print(f"Reference image not found at {ref_img_path}")
+        return
          
     N, H, W = imgs.shape
     num_pixels = H * W
@@ -173,15 +142,14 @@ def run_pca_experiment():
     # Acceleration ratios
     accel_ratios = [1, 2, 4, 8, 16]
     
-    # Sweep K
-    # N=64.
-    Ks = [1, 2, 3, 4, 5, 6, 8, 10, 12, 14, 16, 20, 24, 28, 32, 48]
-    quant_bits = 10
+    # Sweep keep ratios
+    ratios = [0.005, 0.01, 0.05, 0.1, 0.15, 0.2]
+    quant_bits = 8
     
-    print("Starting PCA compression sweep...")
+    print("Starting DCT (Water-filling) compression sweep...")
     
     # Loop over acceleration ratios
-    for R in accel_ratios:        
+    for R in accel_ratios:
         print(f"\n{'='*60}")
         print(f"Acceleration Ratio R = {R}")
         print(f"{'='*60}")
@@ -197,16 +165,20 @@ def run_pca_experiment():
         kspace_undersampled = kspace * mask[None, :, :]  # Apply mask to all coils
         
         # Create output directory for this acceleration ratio
-        output_dir = os.path.join("results", "uniform_coil_compression", f"R{R}")
+        output_dir = os.path.join("results", "refer1b_dct_compression", f"R{R}")
         os.makedirs(output_dir, exist_ok=True)
         
-        results = {'bpp': [], 'psnr': [], 'ssim': [], 'rank': [], 'R': []}
+        results = {'bpp': [], 'psnr': [], 'ssim': [], 'ratio': [], 'R': []}
         
-        for K in Ks:
-            print(f"\n--- K: {K} ---")
+        for r in ratios:
+            print(f"\n--- Keep Ratio: {r} ---")
             
-            # Compress in k-space domain (pass undersampled k-space directly)
-            rec_imgs, bits = pca_compress_decompress(imgs, K, quant_bits, kspace_undersampled=kspace_undersampled)
+            # Compress undersampled k-space
+            rec_kspace, bits = dct_compress_decompress(kspace_undersampled, r, quant_bits)
+            
+            # Convert back to image domain
+            rec_imgs = sp.ifft(rec_kspace, axes=(-2, -1))
+            
             bpp = bits / num_pixels_total
             
             p, s = run_espirit_pipeline(rec_imgs, ref_img, verbose=False)
@@ -214,16 +186,21 @@ def run_pca_experiment():
             results['bpp'].append(bpp)
             results['psnr'].append(p)
             results['ssim'].append(s)
-            results['rank'].append(K)
+            results['ratio'].append(r)
             results['R'].append(R)
             
             print(f"BPP: {bpp:.2f}, PSNR: {p:.2f} dB, SSIM: {s:.4f}")
             
-            # Reconstruct final ESPIRiT image for saving
+            # Reconstruct and Plot for this ratio
+            from utils.espirit_torch import csm_from_espirit
+            from utils.mri_utils import crop_center, get_device
+            
+            # 1. FFT
             ksp_rec = sp.fft(rec_imgs, axes=(-2, -1))
             ksp_rec_torch = torch.from_numpy(ksp_rec).to(get_device())
             ksp_cal = crop_center(ksp_rec_torch, 32)
             im_size = rec_imgs.shape[-2:]
+            
             maps, _ = csm_from_espirit(
                 ksp_cal,
                 im_size=im_size,
@@ -235,28 +212,30 @@ def run_pca_experiment():
             )
             if isinstance(maps, torch.Tensor):
                 maps = maps.cpu().numpy()
+                
             weights = np.sum(np.abs(maps)**2, axis=0) + 1e-16
             rec_final = np.sum(rec_imgs * np.conj(maps), axis=0) / weights
             rec_final = normalize_complex_image(rec_final)
             
-            rec_path = os.path.join(output_dir, f"rec_img_rank{K}.pt")
+            # Save reconstruction
+            rec_path = os.path.join(output_dir, f"rec_img_r{r}.pt")
             torch.save(torch.from_numpy(rec_final), rec_path)
             
+            # Plot reconstruction
             plt.figure(figsize=(5, 5))
             plt.imshow(np.flipud(np.abs(rec_final).T), cmap='gray')
-            plt.title(f"PCA Rank={K}, R={R}\nBPP={bpp:.2f}, PSNR={p:.2f}dB, SSIM={s:.4f}")
+            plt.title(f"DCT Ratio={r}, R={R}\nBPP={bpp:.2f}, PSNR={p:.2f}dB, SSIM={s:.4f}")
             plt.axis('off')
-            plt.savefig(os.path.join(output_dir, f"rec_img_rank{K}.png"), bbox_inches='tight')
+            plt.savefig(os.path.join(output_dir, f"rec_img_r{r}.png"), bbox_inches='tight')
             plt.close()
         
         # Save results for this acceleration ratio
-        torch.save(results, os.path.join(output_dir, "results_pca.pt"))
-        
-        save_rd_curve(results, f"PCA (Uniform) R={R}", f"pca_rd_curve_R{R}.png", output_dir=output_dir)
+        torch.save(results, os.path.join(output_dir, "results_dct.pt"))
+        save_rd_curve(results, f"DCT R={R}", f"dct_rd_curve_R{R}.png", output_dir=output_dir)
         print(f"Saved results for R={R} to {output_dir}")
     
     print("Done.")
 
 if __name__ == "__main__":
-    run_pca_experiment()
+    run_dct_experiment()
 

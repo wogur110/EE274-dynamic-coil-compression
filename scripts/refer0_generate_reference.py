@@ -4,20 +4,21 @@ import sigpy as sp
 import os
 import sys
 
-# Add project_JH to path (go up 3 levels from scripts/ to project_JH/)
+# Add parent directory to path (go up 1 level from scripts/ to EE274-dynamic-coil-compression/)
 script_dir = os.path.dirname(os.path.abspath(__file__))
-project_jh_dir = os.path.dirname(os.path.dirname(os.path.dirname(script_dir)))
-if project_jh_dir not in sys.path:
-    sys.path.insert(0, project_jh_dir)
+project_root = os.path.dirname(script_dir)
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
 
-from project_JH.utils.mri_utils import (
+from utils.mri_utils import (
     load_imgs,
     crop_center,
     get_device,
     DATA_DIR,
     normalize_complex_image,
 )
-from project_JH.utils.espirit_torch import csm_from_espirit
+from utils.espirit_torch import csm_from_espirit
+from utils.plot_reference import plot_results
 
 def generate_reference():
     # Load data
@@ -76,7 +77,6 @@ def generate_reference():
     torch.save(torch.from_numpy(maps), maps_path)
     
     print("Plotting results...")
-    from project_JH.utils.plot_reference import plot_results
     plot_results()
     
     print("Done.")
