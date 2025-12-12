@@ -8,7 +8,7 @@ import argparse
 
 # Add parent directory to path
 script_dir = os.path.dirname(os.path.abspath(__file__))
-project_root = os.path.dirname(script_dir)
+project_root = os.path.dirname(os.path.dirname(script_dir))
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
@@ -32,7 +32,7 @@ def load_optimal_hyperparameters(base="results", use_waterfilling=False):
     """Load optimal hyperparameters from the saved file."""
     method_name = "dynamic_coil_compression_waterfilling" if use_waterfilling else "dynamic_coil_compression"
     suffix = "_waterfilling" if use_waterfilling else ""
-    optimal_path = os.path.join(base, method_name, "optimal_hyperparameters", f"all_optimal_hyperparameters{suffix}.pt")
+    optimal_path = os.path.join(base, "compression_result", method_name, "optimal_hyperparameters", f"all_optimal_hyperparameters{suffix}.pt")
     
     if not os.path.exists(optimal_path):
         print(f"Optimal hyperparameters not found at {optimal_path}")
@@ -59,10 +59,7 @@ def run_optimal_compression_for_R(R, optimal_configs, imgs, ref_img, quant_bits=
         results dict
     """
     # Import the appropriate compression function
-    if use_waterfilling:
-        from dynamic_coil_compression_waterfilling import dynamic_coil_compress_decompress
-    else:
-        from dynamic_coil_compression import dynamic_coil_compress_decompress
+    from compression.dynamic_coil_compression import dynamic_coil_compress_decompress
     
     N, H, W = imgs.shape
     num_pixels = H * W
@@ -84,7 +81,7 @@ def run_optimal_compression_for_R(R, optimal_configs, imgs, ref_img, quant_bits=
     
     # Create output directory for optimal results
     method_name = "dynamic_coil_compression_waterfilling" if use_waterfilling else "dynamic_coil_compression"
-    output_dir = os.path.join("results", method_name, "optimal", f"R{R}")
+    output_dir = os.path.join("results", "compression_result", method_name, "optimal", f"R{R}")
     os.makedirs(output_dir, exist_ok=True)
     
     results = {'bpp': [], 'psnr': [], 'ssim': [], 'K': [], 'cut_ratio': [], 'R': []}
@@ -103,7 +100,8 @@ def run_optimal_compression_for_R(R, optimal_configs, imgs, ref_img, quant_bits=
         
         # Run compression with optimal hyperparameters
         rec_imgs, bits = dynamic_coil_compress_decompress(
-            imgs, K, cut_ratio, quant_bits, kspace_undersampled=kspace_undersampled
+            imgs, K, cut_ratio, quant_bits, kspace_undersampled=kspace_undersampled,
+            waterfilling=use_waterfilling
         )
         bpp = bits / num_pixels_total
         
@@ -185,7 +183,7 @@ def main():
     # Load data
     print("Loading images and reference...")
     imgs = load_imgs()
-    ref_img_path = os.path.join("results", "refer0", "ref_image.pt")
+    ref_img_path = os.path.join("results", "reference", "ref_image.pt")
     
     try:
         ref_img = torch.load(ref_img_path).numpy()
@@ -218,7 +216,7 @@ def main():
     # Save combined results
     method_name = "dynamic_coil_compression_waterfilling" if use_waterfilling else "dynamic_coil_compression"
     suffix = "_waterfilling" if use_waterfilling else ""
-    combined_path = os.path.join("results", method_name, "optimal", f"all_results_optimal{suffix}.pt")
+    combined_path = os.path.join("results", "compression_result", method_name, "optimal", f"all_results_optimal{suffix}.pt")
     torch.save(all_results, combined_path)
     print(f"\nSaved all optimal results to {combined_path}")
     

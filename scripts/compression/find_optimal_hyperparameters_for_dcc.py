@@ -7,7 +7,7 @@ import argparse
 
 # Add parent directory to path
 script_dir = os.path.dirname(os.path.abspath(__file__))
-project_root = os.path.dirname(script_dir)
+project_root = os.path.dirname(os.path.dirname(script_dir))
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
@@ -15,10 +15,10 @@ if project_root not in sys.path:
 def load_results_for_R(R, base="results", use_waterfilling=False):
     """Load results for a specific acceleration ratio R."""
     if use_waterfilling:
-        method_dir = "dynamic_coil_compression_waterfilling"
+        method_dir = os.path.join("compression_result", "dynamic_coil_compression_waterfilling")
         results_file = "results_dynamic_waterfilling.pt"
     else:
-        method_dir = "dynamic_coil_compression"
+        method_dir = os.path.join("compression_result", "dynamic_coil_compression")
         results_file = "results_dynamic.pt"
     
     results_path = os.path.join(base, method_dir, f"R{R}", results_file)
@@ -241,8 +241,8 @@ def main():
     ssim_drop_threshold = 0.3
     
     # Output directory for optimal hyperparameters
-    method_name = "dynamic_coil_compression_waterfilling" if use_waterfilling else "dynamic_coil_compression"
-    output_dir = os.path.join(base, method_name, "optimal_hyperparameters")
+    method_subpath = "dynamic_coil_compression_waterfilling" if use_waterfilling else "dynamic_coil_compression"
+    output_dir = os.path.join(base, "compression_result", method_subpath, "optimal_hyperparameters")
     os.makedirs(output_dir, exist_ok=True)
     
     method_label = "Waterfilling" if use_waterfilling else "Regular"

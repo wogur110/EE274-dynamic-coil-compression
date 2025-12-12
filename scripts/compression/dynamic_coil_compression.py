@@ -5,10 +5,11 @@ import os
 import sys
 import matplotlib.pyplot as plt
 import zlib
+import argparse
 
-# Add parent directory to path (go up 1 level from scripts/ to EE274-dynamic-coil-compression/)
+# Add parent directory to path (go up 2 levels from scripts/compression/ to EE274-dynamic-coil-compression/)
 script_dir = os.path.dirname(os.path.abspath(__file__))
-project_root = os.path.dirname(script_dir)
+project_root = os.path.dirname(os.path.dirname(script_dir))
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
@@ -27,22 +28,18 @@ from utils.espirit_torch import csm_from_espirit
 def quantize_and_encode(coeffs, bits=8):
     """
     Uniform quantization and zlib compression.
-    This is the same base quantizer as in uniform_coil_compression.py and is
-    used as a building block for the per-coil waterfilling strategy.
     """
     real = coeffs.real
     imag = coeffs.imag
-
+    
     min_r, max_r = real.min(), real.max()
     min_i, max_i = imag.min(), imag.max()
-
+    
     levels = 2**bits - 1
-
+    
     def quant_stream(x, mn, mx):
         if mx == mn:
-            return np.zeros_like(
-                x, dtype=np.uint8 if bits <= 8 else np.uint16
-            ), 0
+            return np.zeros_like(x, dtype=np.uint8 if bits<=8 else np.uint16), 0
         scale = levels / (mx - mn)
         q = np.round((x - mn) * scale)
         q = np.clip(q, 0, levels)
@@ -51,50 +48,34 @@ def quantize_and_encode(coeffs, bits=8):
         elif bits <= 16:
             return q.astype(np.uint16), 0
         return q.astype(np.uint32), 0
-
+        
     q_real, _ = quant_stream(real, min_r, max_r)
     q_imag, _ = quant_stream(imag, min_i, max_i)
-
+    
     b_real = q_real.tobytes()
     b_imag = q_imag.tobytes()
-
+    
     c_real = zlib.compress(b_real)
     c_imag = zlib.compress(b_imag)
-
+    
     # Bits = compressed size * 8 + overhead (min/max floats)
     bits_used = (len(c_real) + len(c_imag)) * 8 + 4 * 32
-
-    # Dequantize (simulation)
+    
+    # Dequantize (Simulation)
     def dequant(q, mn, mx):
         if mx == mn:
             return np.full(q.shape, mn)
         scale = (mx - mn) / levels
         return q.astype(np.float32) * scale + mn
-
+        
     rec_real = dequant(q_real, min_r, max_r)
     rec_imag = dequant(q_imag, min_i, max_i)
-
+    
     return rec_real + 1j * rec_imag, bits_used
 
 def waterfilling_quantize_and_encode(compressed_kspace, singular_values, max_bits=10):
     """
     Waterfilling quantization based on singular values using scaling factors.
-    
-    Similar to EE274_HW4_ImageCompressor.ipynb approach:
-    1. Calculate scaling factors per coil dimension based on eigenvalues (singular_values)
-    2. Multiply compressed_kspace by scaling factors (larger scale = more precision)
-    3. Quantize all k-space data at once (for better zlib compression)
-    4. Dequantize
-    5. Divide by scaling factors
-    
-    Args:
-        compressed_kspace: (K_pca, H, W) complex array
-        singular_values: (K_pca,) array of singular values (eigenvalues)
-        max_bits: quantization bits (used uniformly for all data after scaling)
-    
-    Returns:
-        rec_kspace: (K_pca, H, W) reconstructed k-space after quantization
-        total_bits: total number of bits used
     """
     K_pca, H, W = compressed_kspace.shape
     
@@ -108,8 +89,7 @@ def waterfilling_quantize_and_encode(compressed_kspace, singular_values, max_bit
     distortions = np.minimum(s_clipped, theta)
     optimal_rate = 0.5 * np.log2(s_clipped / distortions)
     
-    # Calculate scaling matrix similar to notebook:
-    # scaling_matrix = 0.1 * floor(2^optimal_rate), then clip by max_scale / sqrt(eigenvals)
+    # Calculate scaling matrix
     base_scale = 0.1
     max_scale = 30.0  # Can be tuned for MRI data
     
@@ -132,9 +112,6 @@ def waterfilling_quantize_and_encode(compressed_kspace, singular_values, max_bit
 def simple_coil_compression(kspace_data, n_virtual_coils, calib_size=32):
     """
     Coil compression using calibration data in k-space.
-    kspace_data: shape (N_coils, H, W) - k-space data
-    n_virtual_coils: integer, number of coils to keep
-    calib_size: size of calibration region (default 32x32)
     Returns: compressed k-space (n_virtual_coils, H, W), compression_matrix, singular_values
     """
     N_coils, H, W = kspace_data.shape
@@ -148,29 +125,22 @@ def simple_coil_compression(kspace_data, n_virtual_coils, calib_size=32):
     
     calib_data = kspace_data[:, sy:sy+calib_h, sx:sx+calib_w]  # (N_coils, calib_h, calib_w)
     
-    # 2. Reshape calibration data to [Samples, Coils]
+    # 2. Reshape calibration data
     flat_calib = calib_data.reshape(N_coils, -1).T  # (calib_h * calib_w, N_coils)
     
-    # 3. Compute Covariance Matrix (Coil x Coil)
-    # Using specific numpy notation for conjugate transpose (.conj().T)
+    # 3. Compute Covariance Matrix
     covariance = flat_calib.T.conj() @ flat_calib  # (N_coils, N_coils)
     
-    # 4. Eigen decomposition using SVD (more numerically stable)
-    # U: Unitary arrays (eigenvectors), S: Singular values
+    # 4. Eigen decomposition using SVD
     U, S, Vh = np.linalg.svd(covariance)
     
-    # 5. Select top K components (Columns of U)
+    # 5. Select top K components
     compression_matrix = U[:, :n_virtual_coils]  # (N_coils, n_virtual_coils)
     singular_values = S[:n_virtual_coils]  # (n_virtual_coils,)
     
     # 6. Apply compression to full k-space
-    # Reshape full k-space to [Samples, Coils]
     flat_kspace = kspace_data.reshape(N_coils, -1).T  # (H * W, N_coils)
-    
-    # (Samples x Physical) @ (Physical x Virtual) -> (Samples x Virtual)
     compressed_flat = flat_kspace @ compression_matrix  # (H * W, n_virtual_coils)
-    
-    # Reshape back to k-space dimensions
     compressed_kspace = compressed_flat.T.reshape(n_virtual_coils, H, W)
     
     return compressed_kspace, compression_matrix, singular_values
@@ -178,8 +148,6 @@ def simple_coil_compression(kspace_data, n_virtual_coils, calib_size=32):
 def get_circular_mask(H, W, radius_ratio):
     """
     Create a circular mask for k-space corner cutting.
-    radius_ratio: float in [0, 1], where 1.0 keeps all data, 0.0 keeps only center
-    Returns: boolean mask (H, W) where True means keep the data
     """
     cy, cx = H // 2, W // 2
     y = np.arange(H) - cy
@@ -193,16 +161,10 @@ def get_circular_mask(H, W, radius_ratio):
     mask = R_norm <= radius_ratio
     return mask
 
-def dynamic_coil_compress_decompress(imgs, K_pca, cut_ratio, quant_bits=8, calib_size=32, kspace_undersampled=None):
+def dynamic_coil_compress_decompress(imgs, K_pca, cut_ratio, quant_bits=8, calib_size=32, kspace_undersampled=None, waterfilling=False):
     """
-    Dynamic coil compression with corner cutting based on singular values and waterfilling quantization.
-    imgs: (N, H, W) complex - image domain data (used if kspace_undersampled is None)
-    kspace_undersampled: (N, H, W) complex - optional pre-computed undersampled k-space
-    K_pca: Number of virtual coils to keep
-    cut_ratio: float, controls how much corner cutting based on singular values
-    quant_bits: maximum quantization bits (used for waterfilling)
-    calib_size: calibration region size (default 32x32)
-    Returns: compressed coil images (K_pca, H, W) and total bits
+    Dynamic coil compression with corner cutting based on singular values
+    and optional waterfilling quantization.
     """
     if kspace_undersampled is None:
         # Convert to k-space
@@ -216,12 +178,8 @@ def dynamic_coil_compress_decompress(imgs, K_pca, cut_ratio, quant_bits=8, calib
     compressed_kspace, compression_matrix, singular_values = simple_coil_compression(
         kspace, K_pca, calib_size=calib_size
     )
-    # compressed_kspace: (K_pca, H, W)
-    # singular_values: (K_pca,)
     
     # 3. Normalize singular values using log-scale for dynamic range compression
-    #    First coil (largest log-singular-value) gets S_normalized ~ 1.0,
-    #    smaller singular values get reduced ratios.
     s = singular_values.astype(np.float64)
     eps = 1e-12
     s_clipped = np.clip(s, eps, None)
@@ -234,26 +192,27 @@ def dynamic_coil_compress_decompress(imgs, K_pca, cut_ratio, quant_bits=8, calib
         S_normalized = (s_log - s_min) / (s_max - s_min)  # (K_pca,)
     
     # 4. Apply circular masks to each virtual coil based on singular values
-    # radius_ratio = 1.0 - (cut_ratio * (1 - normalized_singular_value))
-    # For first coil (S_norm=1.0): radius_ratio = 1.0 (keep all)
-    # For less important coils: radius_ratio decreases
     compressed_kspace_masked = np.zeros_like(compressed_kspace)
     for k in range(K_pca):
-        # Calculate radius ratio for this coil
-        # Higher singular value -> larger radius (keep more data)
+        # Calculate radius ratio
         radius_ratio = 1.0 - cut_ratio * (1.0 - S_normalized[k])
-        radius_ratio = np.clip(radius_ratio, 0.0, 1.0)  # Ensure valid range
+        radius_ratio = np.clip(radius_ratio, 0.0, 1.0)
         
         # Create circular mask
         mask = get_circular_mask(H, W, radius_ratio)
         
-        # Apply mask to this virtual coil's k-space
+        # Apply mask
         compressed_kspace_masked[k] = compressed_kspace[k] * mask
     
-    # 5. Quantize masked compressed k-space using waterfilling based on singular values
-    compressed_kspace_quantized, bits_coeffs = waterfilling_quantize_and_encode(
-        compressed_kspace_masked, singular_values, max_bits=quant_bits
-    )
+    # 5. Quantize masked compressed k-space
+    if waterfilling:
+        compressed_kspace_quantized, bits_coeffs = waterfilling_quantize_and_encode(
+            compressed_kspace_masked, singular_values, max_bits=quant_bits
+        )
+    else:
+        compressed_kspace_quantized, bits_coeffs = quantize_and_encode(
+            compressed_kspace_masked, bits=quant_bits
+        )
     
     # 6. Overhead for compression matrix (N * K_pca complex floats, 32 bits each)
     bits_basis = N * K_pca * 2 * 4 * 8
@@ -265,12 +224,9 @@ def dynamic_coil_compress_decompress(imgs, K_pca, cut_ratio, quant_bits=8, calib
     
     return imgs_rec, total_bits
 
-def plot_rd_curves_by_cut_ratio(results, R, output_dir):
+def plot_rd_curves_by_cut_ratio(results, R, output_dir, file_prefix="dynamic"):
     """
     Plot RD curves grouped by cut_ratio with different colors for comparison.
-    results: dict with 'bpp', 'psnr', 'ssim', 'cut_ratio' lists
-    R: acceleration ratio
-    output_dir: directory to save plots
     """
     # Group results by cut_ratio
     cut_ratios = sorted(set(results['cut_ratio']))
@@ -297,7 +253,7 @@ def plot_rd_curves_by_cut_ratio(results, R, output_dir):
     
     ax1.set_xlabel("Bits per complex coil pixel (bpp)", fontsize=12)
     ax1.set_ylabel("PSNR (dB)", fontsize=12)
-    ax1.set_title(f"Dynamic Coil Compression (Waterfilling) R={R}: PSNR vs cut_ratio", fontsize=14, fontweight='bold')
+    ax1.set_title(f"Dynamic Coil Compression R={R}: PSNR vs cut_ratio", fontsize=14, fontweight='bold')
     ax1.grid(True, which="both", ls="--", alpha=0.5)
     ax1.legend(loc='best', fontsize=10)
     
@@ -317,21 +273,21 @@ def plot_rd_curves_by_cut_ratio(results, R, output_dir):
     
     ax2.set_xlabel("Bits per complex coil pixel (bpp)", fontsize=12)
     ax2.set_ylabel("SSIM", fontsize=12)
-    ax2.set_title(f"Dynamic Coil Compression (Waterfilling) R={R}: SSIM vs cut_ratio", fontsize=14, fontweight='bold')
+    ax2.set_title(f"Dynamic Coil Compression R={R}: SSIM vs cut_ratio", fontsize=14, fontweight='bold')
     ax2.grid(True, which="both", ls="--", alpha=0.5)
     ax2.legend(loc='best', fontsize=10)
     
     plt.tight_layout()
     
     # Save plot
-    plot_path = os.path.join(output_dir, f"dynamic_waterfilling_rd_curve_by_cut_ratio_R{R}.png")
+    plot_path = os.path.join(output_dir, f"{file_prefix}_rd_curve_by_cut_ratio_R{R}.png")
     plt.savefig(plot_path, dpi=200, bbox_inches='tight')
     plt.close(fig)
     print(f"Saved cut_ratio comparison plot to {plot_path}")
 
-def run_dynamic_waterfilling_experiment():
+def run_dynamic_experiment(use_waterfilling):
     imgs = load_imgs()
-    ref_img_path = os.path.join("results", "refer0", "ref_image.pt")
+    ref_img_path = os.path.join("results", "reference", "ref_image.pt")
     print(f"Loading reference from {ref_img_path}...")
     try:
         ref_img = torch.load(ref_img_path).numpy()
@@ -349,12 +305,25 @@ def run_dynamic_waterfilling_experiment():
     # Experiment with two hyperparameters: Ks and cut_ratio
     Ks = [1, 2, 3, 4, 5, 6, 8, 10, 12, 14, 16, 20, 24, 28, 32, 48]
     cut_ratios = [0.0, 0.2, 0.4, 0.6, 0.8, 1.0]
-    quant_bits = 10  # maximum bits for the most important virtual coil
+    quant_bits = 10
     
-    print("Starting Dynamic Coil Compression (Waterfilling) sweep...")
+    method_name = "Waterfilling" if use_waterfilling else "Regular"
+    print(f"Starting Dynamic Coil Compression ({method_name}) sweep...")
     print(f"Ks: {Ks}")
     print(f"cut_ratios: {cut_ratios}")
     
+    # Determine output names based on method
+    if use_waterfilling:
+        subdir_name = "dynamic_coil_compression_waterfilling"
+        results_filename = "results_dynamic_waterfilling.pt"
+        rd_curve_filename = "dynamic_waterfilling_rd_curve"
+        plot_prefix = "dynamic_waterfilling"
+    else:
+        subdir_name = "dynamic_coil_compression"
+        results_filename = "results_dynamic.pt"
+        rd_curve_filename = "dynamic_rd_curve"
+        plot_prefix = "dynamic"
+
     # Loop over acceleration ratios
     for R in accel_ratios:
         print(f"\n{'='*60}")
@@ -372,7 +341,7 @@ def run_dynamic_waterfilling_experiment():
         kspace_undersampled = kspace * mask[None, :, :]  # Apply mask to all coils
         
         # Create output directory for this acceleration ratio
-        output_dir = os.path.join("results", "dynamic_coil_compression_waterfilling", f"R{R}")
+        output_dir = os.path.join("results", "compression_result", subdir_name, f"R{R}")
         os.makedirs(output_dir, exist_ok=True)
         
         results = {'bpp': [], 'psnr': [], 'ssim': [], 'K': [], 'cut_ratio': [], 'R': []}
@@ -382,7 +351,9 @@ def run_dynamic_waterfilling_experiment():
                 print(f"\n--- K: {K}, cut_ratio: {cut_ratio:.2f} ---")
                 
                 rec_imgs, bits = dynamic_coil_compress_decompress(
-                    imgs, K, cut_ratio, quant_bits, kspace_undersampled=kspace_undersampled
+                    imgs, K, cut_ratio, quant_bits, 
+                    kspace_undersampled=kspace_undersampled,
+                    waterfilling=use_waterfilling
                 )
                 bpp = bits / num_pixels_total
                 
@@ -402,17 +373,21 @@ def run_dynamic_waterfilling_experiment():
                 torch.save(torch.from_numpy(rec_imgs), rec_path)
         
         # Save results for this acceleration ratio
-        torch.save(results, os.path.join(output_dir, "results_dynamic_waterfilling.pt"))
+        torch.save(results, os.path.join(output_dir, results_filename))
         
         # Plot RD curves grouped by cut_ratio with different colors
-        plot_rd_curves_by_cut_ratio(results, R, output_dir)
+        plot_rd_curves_by_cut_ratio(results, R, output_dir, file_prefix=plot_prefix)
         
         # Also save the standard RD curve
-        save_rd_curve(results, f"Dynamic Coil Compression (Waterfilling) R={R}", f"dynamic_waterfilling_rd_curve_R{R}.png", output_dir=output_dir)
+        curve_title = f"Dynamic Coil Compression ({method_name}) R={R}"
+        save_rd_curve(results, curve_title, f"{rd_curve_filename}_R{R}.png", output_dir=output_dir)
         print(f"Saved results for R={R} to {output_dir}")
     
     print("Done.")
 
 if __name__ == "__main__":
-    run_dynamic_waterfilling_experiment()
-
+    parser = argparse.ArgumentParser(description="Dynamic Coil Compression with optional Waterfilling")
+    parser.add_argument("--waterfilling", action="store_true", help="Enable waterfilling quantization")
+    args = parser.parse_args()
+    
+    run_dynamic_experiment(args.waterfilling)

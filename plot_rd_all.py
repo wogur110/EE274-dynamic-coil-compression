@@ -45,21 +45,22 @@ def load_results(path):
 def plot_rd_curves_for_R(R, base="results"):
     """Plot RD curves for a specific acceleration ratio R."""
     # Define configs for ALL methods
+    # Define configs for ALL methods
     all_configs = [
-        ("JPEG compression", os.path.join(base, "refer1a_jpeg_compression", f"R{R}", "results_jpeg.pt"), "tab:blue"),
-        ("DCT transform + compression", os.path.join(base, "refer1b_dct_compression", f"R{R}", "results_dct.pt"), "tab:orange"),
-        ("Coil Decoupling", os.path.join(base, "uniform_coil_compression", f"R{R}", "results_pca.pt"), "tab:red"),
-        ("Coil Decoupling + Waterfilling", os.path.join(base, "uniform_coil_compression_waterfilling", f"R{R}", "results_pca_waterfilling.pt"), "tab:green"),
-        ("Coil Decoupling + Dynamic masking", os.path.join(base, "dynamic_coil_compression", "optimal", f"R{R}", "results_optimal.pt"), "tab:purple"),
-        ("Coil Decoupling + Dynamic masking + Waterfilling", os.path.join(base, "dynamic_coil_compression_waterfilling", "optimal", f"R{R}", "results_optimal_waterfilling.pt"), "tab:brown"),
+        ("JPEG", os.path.join(base, "compression_result", "jpeg_compression", f"R{R}", "results_jpeg.pt"), "tab:blue"),
+        ("DCT", os.path.join(base, "compression_result", "dct_compression", f"R{R}", "results_dct.pt"), "tab:orange"),
+        ("Coil Decoupling (Uniform PCA)", os.path.join(base, "compression_result", "uniform_coil_compression", f"R{R}", "results_pca.pt"), "tab:red"),
+        ("Coil Decoupling (Uniform PCA) + Waterfilling", os.path.join(base, "compression_result", "uniform_coil_compression_waterfilling", f"R{R}", "results_pca_waterfilling.pt"), "tab:green"),
+        ("Dynamic Coil Compression", os.path.join(base, "compression_result", "dynamic_coil_compression", "optimal", f"R{R}", "results_optimal.pt"), "tab:purple"),
+        ("Dynamic Coil Compression + Waterfilling", os.path.join(base, "compression_result", "dynamic_coil_compression_waterfilling", "optimal", f"R{R}", "results_optimal_waterfilling.pt"), "tab:brown"),
     ]
     
     # Define configs for COIL COMPRESSION methods only
     coil_configs = [
-        ("Coil Decoupling", os.path.join(base, "uniform_coil_compression", f"R{R}", "results_pca.pt"), "tab:red"),
-        ("Coil Decoupling + Waterfilling", os.path.join(base, "uniform_coil_compression_waterfilling", f"R{R}", "results_pca_waterfilling.pt"), "tab:green"),
-        ("Coil Decoupling + Dynamic masking", os.path.join(base, "dynamic_coil_compression", "optimal", f"R{R}", "results_optimal.pt"), "tab:purple"),
-        ("Coil Decoupling + Dynamic masking + Waterfilling", os.path.join(base, "dynamic_coil_compression_waterfilling", "optimal", f"R{R}", "results_optimal_waterfilling.pt"), "tab:brown"),
+        ("Coil Decoupling (Uniform PCA)", os.path.join(base, "compression_result", "uniform_coil_compression", f"R{R}", "results_pca.pt"), "tab:red"),
+        ("Coil Decoupling (Uniform PCA) + Waterfilling", os.path.join(base, "compression_result", "uniform_coil_compression_waterfilling", f"R{R}", "results_pca_waterfilling.pt"), "tab:green"),
+        ("Dynamic Coil Compression", os.path.join(base, "compression_result", "dynamic_coil_compression", "optimal", f"R{R}", "results_optimal.pt"), "tab:purple"),
+        ("Dynamic Coil Compression + Waterfilling", os.path.join(base, "compression_result", "dynamic_coil_compression_waterfilling", "optimal", f"R{R}", "results_optimal_waterfilling.pt"), "tab:brown"),
     ]
 
     def prepare_plot_data(configs):
@@ -82,108 +83,89 @@ def plot_rd_curves_for_R(R, base="results"):
         print(f"No data found for R={R}")
         return
 
-    out_dir = base
+    out_dir = os.path.join(base, "plot")
     os.makedirs(out_dir, exist_ok=True)
     
     # ========== Plot 1: rd_curve (ALL methods) ==========
+    # ========== Plot 1: rd_curve (ALL methods) ==========
     if len(all_plot_data) > 0:
-        # Create PSNR plot for all methods
-        fig1, ax1 = plt.subplots(figsize=(10, 7))
+        # Create figure with 2 subplots (PSNR and SSIM)
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(18, 7))
+        
+        # --- Left Plot: PSNR ---
         for label, color, bpp_psnr, psnr, _, _ in all_plot_data:
             ax1.plot(bpp_psnr, psnr, marker='o', color=color, label=label, linewidth=2, markersize=4)
         
-        ax1.set_xlabel("Bits per complex coil pixel (bpp)", fontsize=18)
-        ax1.set_ylabel("PSNR (dB)", fontsize=18)
-        ax1.set_title(f"Rate–Distortion (PSNR) - Acceleration Ratio R={R}", fontsize=21, fontweight='bold')
-        # Set xlim based on acceleration ratio
-        if R == 16:
-            ax1.set_xlim(0, 0.7)
-        elif R == 8:
-            ax1.set_xlim(0, 1.0)
-        elif R == 4:
-            ax1.set_xlim(0, 1.5)
+        ax1.set_xlabel("Bits per complex coil pixel (bpp)", fontsize=16)
+        ax1.set_ylabel("PSNR (dB)", fontsize=16)
+        ax1.set_title(f"Rate–Distortion (PSNR) - R={R}", fontsize=18, fontweight='bold')
         ax1.grid(True, which="both", ls="--", alpha=0.5)
-        ax1.legend(loc='best', fontsize=18)
-        plt.tight_layout()
-        
-        out_path_psnr = os.path.join(out_dir, f"rd_curve_R{R}_psnr.png")
-        plt.savefig(out_path_psnr, dpi=200, bbox_inches='tight')
-        plt.close(fig1)
-        print(f"Saved PSNR RD curve (all methods) for R={R} to {out_path_psnr}")
-        
-        # Create SSIM plot for all methods
-        fig2, ax2 = plt.subplots(figsize=(10, 7))
+        ax1.legend(loc='best', fontsize=12)
+
+        # --- Right Plot: SSIM ---
         for label, color, _, _, bpp_ssim, ssim in all_plot_data:
             ax2.plot(bpp_ssim, ssim, marker='o', color=color, label=label, linewidth=2, markersize=4)
         
-        ax2.set_xlabel("Bits per complex coil pixel (bpp)", fontsize=18)
-        ax2.set_ylabel("SSIM", fontsize=18)
-        ax2.set_title(f"Rate–Distortion (SSIM) - Acceleration Ratio R={R}", fontsize=21, fontweight='bold')
-        # Set xlim based on acceleration ratio
-        if R == 16:
-            ax2.set_xlim(0, 0.7)
-        elif R == 8:
-            ax2.set_xlim(0, 1.0)
-        elif R == 4:
-            ax2.set_xlim(0, 1.5)
+        ax2.set_xlabel("Bits per complex coil pixel (bpp)", fontsize=16)
+        ax2.set_ylabel("SSIM", fontsize=16)
+        ax2.set_title(f"Rate–Distortion (SSIM) - R={R}", fontsize=18, fontweight='bold')
         ax2.grid(True, which="both", ls="--", alpha=0.5)
-        ax2.legend(loc='best', fontsize=18)
-        plt.tight_layout()
+        ax2.legend(loc='best', fontsize=12)
+
+        # Set common xlim based on acceleration ratio if needed
+        for ax in [ax1, ax2]:
+            if R == 16:
+                ax.set_xlim(0, 0.7)
+            elif R == 8:
+                ax.set_xlim(0, 1.0)
+            elif R == 4:
+                ax.set_xlim(0, 1.5)
         
-        out_path_ssim = os.path.join(out_dir, f"rd_curve_R{R}_ssim.png")
-        plt.savefig(out_path_ssim, dpi=200, bbox_inches='tight')
-        plt.close(fig2)
-        print(f"Saved SSIM RD curve (all methods) for R={R} to {out_path_ssim}")
+        plt.tight_layout()
+        out_path = os.path.join(out_dir, f"rd_curve_R{R}.png")
+        plt.savefig(out_path, dpi=200, bbox_inches='tight')
+        plt.close(fig)
+        print(f"Saved combined RD curve (all methods) for R={R} to {out_path}")
     
     # ========== Plot 2: coil_compression_rd_curve (COIL COMPRESSION only) ==========
     if len(coil_plot_data) > 0:
-        # Create PSNR plot for coil compression methods
-        fig3, ax3 = plt.subplots(figsize=(10, 7))
+        # Create figure with 2 subplots (PSNR and SSIM)
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(18, 7))
+        
+        # --- Left Plot: PSNR ---
         for label, color, bpp_psnr, psnr, _, _ in coil_plot_data:
-            ax3.plot(bpp_psnr, psnr, marker='o', color=color, label=label, linewidth=2, markersize=4)
+            ax1.plot(bpp_psnr, psnr, marker='o', color=color, label=label, linewidth=2, markersize=4)
         
-        ax3.set_xlabel("Bits per complex coil pixel (bpp)", fontsize=18)
-        ax3.set_ylabel("PSNR (dB)", fontsize=18)
-        ax3.set_title(f"Rate–Distortion (PSNR) - Acceleration Ratio R={R}", fontsize=21, fontweight='bold')
-        # Set xlim based on acceleration ratio
-        if R == 16:
-            ax3.set_xlim(0, 0.7)
-        elif R == 8:
-            ax3.set_xlim(0, 1.0)
-        elif R == 4:
-            ax3.set_xlim(0, 1.5)
-        ax3.grid(True, which="both", ls="--", alpha=0.5)
-        ax3.legend(loc='best', fontsize=18)
-        plt.tight_layout()
-        
-        out_path_psnr_coil = os.path.join(out_dir, f"coil_compression_rd_curve_R{R}_psnr.png")
-        plt.savefig(out_path_psnr_coil, dpi=200, bbox_inches='tight')
-        plt.close(fig3)
-        print(f"Saved PSNR coil compression RD curve for R={R} to {out_path_psnr_coil}")
-        
-        # Create SSIM plot for coil compression methods
-        fig4, ax4 = plt.subplots(figsize=(10, 7))
+        ax1.set_xlabel("Bits per complex coil pixel (bpp)", fontsize=16)
+        ax1.set_ylabel("PSNR (dB)", fontsize=16)
+        ax1.set_title(f"Rate–Distortion (PSNR) - R={R}", fontsize=18, fontweight='bold')
+        ax1.grid(True, which="both", ls="--", alpha=0.5)
+        ax1.legend(loc='best', fontsize=12)
+
+        # --- Right Plot: SSIM ---
         for label, color, _, _, bpp_ssim, ssim in coil_plot_data:
-            ax4.plot(bpp_ssim, ssim, marker='o', color=color, label=label, linewidth=2, markersize=4)
+            ax2.plot(bpp_ssim, ssim, marker='o', color=color, label=label, linewidth=2, markersize=4)
         
-        ax4.set_xlabel("Bits per complex coil pixel (bpp)", fontsize=18)
-        ax4.set_ylabel("SSIM", fontsize=18)
-        ax4.set_title(f"Rate–Distortion (SSIM) - Acceleration Ratio R={R}", fontsize=21, fontweight='bold')
-        # Set xlim based on acceleration ratio
-        if R == 16:
-            ax4.set_xlim(0, 0.7)
-        elif R == 8:
-            ax4.set_xlim(0, 1.0)
-        elif R == 4:
-            ax4.set_xlim(0, 1.5)
-        ax4.grid(True, which="both", ls="--", alpha=0.5)
-        ax4.legend(loc='best', fontsize=18)
+        ax2.set_xlabel("Bits per complex coil pixel (bpp)", fontsize=16)
+        ax2.set_ylabel("SSIM", fontsize=16)
+        ax2.set_title(f"Rate–Distortion (SSIM) - R={R}", fontsize=18, fontweight='bold')
+        ax2.grid(True, which="both", ls="--", alpha=0.5)
+        ax2.legend(loc='best', fontsize=12)
+
+        # Set common xlim based on acceleration ratio if needed
+        for ax in [ax1, ax2]:
+            if R == 16:
+                ax.set_xlim(0, 0.7)
+            elif R == 8:
+                ax.set_xlim(0, 1.0)
+            elif R == 4:
+                ax.set_xlim(0, 1.5)
+        
         plt.tight_layout()
-        
-        out_path_ssim_coil = os.path.join(out_dir, f"coil_compression_rd_curve_R{R}_ssim.png")
-        plt.savefig(out_path_ssim_coil, dpi=200, bbox_inches='tight')
-        plt.close(fig4)
-        print(f"Saved SSIM coil compression RD curve for R={R} to {out_path_ssim_coil}")
+        out_path_coil = os.path.join(out_dir, f"coil_compression_rd_curve_R{R}.png")
+        plt.savefig(out_path_coil, dpi=200, bbox_inches='tight')
+        plt.close(fig)
+        print(f"Saved combined coil compression RD curve for R={R} to {out_path_coil}")
 
 
 def main():

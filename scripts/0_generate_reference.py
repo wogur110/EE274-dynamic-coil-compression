@@ -64,7 +64,7 @@ def generate_reference():
     ref_img = normalize_complex_image(ref_img)
     
     # Save results
-    output_dir = os.path.join("results", "refer0")
+    output_dir = os.path.join("results", "reference")
     os.makedirs(output_dir, exist_ok=True)
     
     ref_img_path = os.path.join(output_dir, "ref_image.pt")

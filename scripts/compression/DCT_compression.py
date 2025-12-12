@@ -7,8 +7,9 @@ import matplotlib.pyplot as plt
 from scipy.fft import dctn, idctn
 
 # Add parent directory to path (go up 1 level from scripts/ to EE274-dynamic-coil-compression/)
+# Add parent directory to path (go up 2 levels from scripts/compression/ to EE274-dynamic-coil-compression/)
 script_dir = os.path.dirname(os.path.abspath(__file__))
-project_root = os.path.dirname(script_dir)
+project_root = os.path.dirname(os.path.dirname(script_dir))
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
@@ -128,7 +129,7 @@ def dct_compress_decompress(kspace, keep_ratio, quant_bits=8):
 
 def run_dct_experiment():
     imgs = load_imgs()
-    ref_img_path = os.path.join("results", "refer0", "ref_image.pt")
+    ref_img_path = os.path.join("results", "reference", "ref_image.pt")
     try:
         ref_img = torch.load(ref_img_path).numpy()
     except:
@@ -165,7 +166,7 @@ def run_dct_experiment():
         kspace_undersampled = kspace * mask[None, :, :]  # Apply mask to all coils
         
         # Create output directory for this acceleration ratio
-        output_dir = os.path.join("results", "refer1b_dct_compression", f"R{R}")
+        output_dir = os.path.join("results", "compression_result", "dct_compression", f"R{R}")
         os.makedirs(output_dir, exist_ok=True)
         
         results = {'bpp': [], 'psnr': [], 'ssim': [], 'ratio': [], 'R': []}

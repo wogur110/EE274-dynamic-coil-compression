@@ -5,10 +5,11 @@ import os
 import sys
 import matplotlib.pyplot as plt
 import zlib
+import argparse
 
-# Add parent directory to path (go up 1 level from scripts/ to EE274-dynamic-coil-compression/)
+# Add parent directory to path (go up 2 levels from scripts/compression/ to EE274-dynamic-coil-compression/)
 script_dir = os.path.dirname(os.path.abspath(__file__))
-project_root = os.path.dirname(script_dir)
+project_root = os.path.dirname(os.path.dirname(script_dir))
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
@@ -72,17 +73,52 @@ def quantize_and_encode(coeffs, bits=8):
     
     return rec_real + 1j * rec_imag, bits_used
 
+def waterfilling_quantize_and_encode(compressed_kspace, singular_values, max_bits=10):
+    """
+    Waterfilling quantization based on singular values using scaling factors.
+    """
+    K_pca, H, W = compressed_kspace.shape
+    
+    # Use log of singular values to define relative importance
+    s = np.asarray(singular_values).astype(np.float64)
+    eps = 1e-12
+    s_clipped = np.clip(s, eps, None)
+    
+    theta = 0.01
+    distortions = np.minimum(s_clipped, theta)
+    
+    optimal_rate = 0.5 * np.log2(s_clipped / distortions)
+    
+    # Calculate scaling matrix similar to notebook
+    base_scale = 0.1
+    max_scale = 30.0
+    
+    # Calculate scaling factors per coil
+    scaling_matrix = base_scale * np.floor(np.power(2.0, optimal_rate))  # (K_pca,)
+    
+    scaling_matrix = np.minimum(scaling_matrix / np.sqrt(s_clipped), max_scale)
+    
+    # Apply scaling factors to compressed_kspace (per coil dimension)
+    scaled_kspace = compressed_kspace * scaling_matrix[:, None, None]
+    
+    # Quantize all scaled k-space data at once
+    scaled_kspace_quantized, bits_coeffs = quantize_and_encode(
+        scaled_kspace, bits=max_bits
+    )
+    
+    # Divide by scaling factors to recover original scale
+    rec_kspace = scaled_kspace_quantized / scaling_matrix[:, None, None]
+    
+    return rec_kspace, bits_coeffs
+
 def simple_coil_compression(kspace_data, n_virtual_coils, calib_size=32):
     """
     Coil compression using calibration data in k-space.
-    kspace_data: shape (N_coils, H, W) or (N_coils, H, W) - k-space data
-    n_virtual_coils: integer, number of coils to keep
-    calib_size: size of calibration region (default 32x32)
-    Returns: compressed k-space (n_virtual_coils, H, W)
+    Returns: compressed_kspace (n_virtual_coils, H, W), compression_matrix, singular_values
     """
     N_coils, H, W = kspace_data.shape
     
-    # 1. Extract calibration data (center 32x32 region)
+    # 1. Extract calibration data (center region)
     calib_h = calib_size
     calib_w = calib_size
     cy, cx = H // 2, W // 2
@@ -91,41 +127,30 @@ def simple_coil_compression(kspace_data, n_virtual_coils, calib_size=32):
     
     calib_data = kspace_data[:, sy:sy+calib_h, sx:sx+calib_w]  # (N_coils, calib_h, calib_w)
     
-    # 2. Reshape calibration data to [Samples, Coils]
+    # 2. Reshape calibration data
     flat_calib = calib_data.reshape(N_coils, -1).T  # (calib_h * calib_w, N_coils)
     
-    # 3. Compute Covariance Matrix (Coil x Coil)
-    # Using specific numpy notation for conjugate transpose (.conj().T)
+    # 3. Compute Covariance Matrix
     covariance = flat_calib.T.conj() @ flat_calib  # (N_coils, N_coils)
     
-    # 4. Eigen decomposition using SVD (more numerically stable)
-    # U: Unitary arrays (eigenvectors), S: Singular values
+    # 4. Eigen decomposition
     U, S, Vh = np.linalg.svd(covariance)
     
-    # 5. Select top K components (Columns of U)
+    # 5. Select top K components
     compression_matrix = U[:, :n_virtual_coils]  # (N_coils, n_virtual_coils)
+    singular_values = S[:n_virtual_coils].copy()
     
     # 6. Apply compression to full k-space
-    # Reshape full k-space to [Samples, Coils]
     flat_kspace = kspace_data.reshape(N_coils, -1).T  # (H * W, N_coils)
-    
-    # (Samples x Physical) @ (Physical x Virtual) -> (Samples x Virtual)
     compressed_flat = flat_kspace @ compression_matrix  # (H * W, n_virtual_coils)
-    
-    # Reshape back to k-space dimensions
     compressed_kspace = compressed_flat.T.reshape(n_virtual_coils, H, W)
     
-    return compressed_kspace, compression_matrix
+    return compressed_kspace, compression_matrix, singular_values
 
-def pca_compress_decompress(imgs, K_pca, quant_bits=8, calib_size=32, kspace_undersampled=None):
+def pca_compress_decompress(imgs, K_pca, quant_bits=8, calib_size=32, kspace_undersampled=None, waterfilling=False):
     """
     PCA compression using k-space calibration data.
-    imgs: (N, H, W) complex - image domain data (used if kspace_undersampled is None)
-    kspace_undersampled: (N, H, W) complex - optional pre-computed undersampled k-space
-    K_pca: Number of virtual coils to keep
-    quant_bits: quantization bits
-    calib_size: calibration region size (default 32x32)
-    Returns: compressed coil images (K_pca, H, W) and total bits
+    Supports optional waterfilling quantization.
     """
     if kspace_undersampled is None:
         # Convert to k-space
@@ -136,29 +161,33 @@ def pca_compress_decompress(imgs, K_pca, quant_bits=8, calib_size=32, kspace_und
     N, H, W = kspace.shape
     
     # 1. Coil compression using calibration data
-    compressed_kspace, compression_matrix = simple_coil_compression(
+    compressed_kspace, compression_matrix, singular_values = simple_coil_compression(
         kspace, K_pca, calib_size=calib_size
     )
-    # compressed_kspace: (K_pca, H, W)
     
-    # 3. Quantize compressed k-space
-    compressed_kspace_quantized, bits_coeffs = quantize_and_encode(
-        compressed_kspace, bits=quant_bits
-    )
+    # 2. Quantize compressed k-space
+    if waterfilling:
+        compressed_kspace_quantized, bits_coeffs = waterfilling_quantize_and_encode(
+            compressed_kspace, singular_values, max_bits=quant_bits
+        )
+    else:
+        compressed_kspace_quantized, bits_coeffs = quantize_and_encode(
+            compressed_kspace, bits=quant_bits
+        )
     
-    # 4. Overhead for compression matrix (N * K_pca complex floats, 32 bits each)
+    # 3. Overhead for compression matrix (N * K_pca complex floats, 32 bits each)
     bits_basis = N * K_pca * 2 * 4 * 8
     
     total_bits = bits_coeffs + bits_basis
     
-    # 5. Convert compressed k-space back to image domain
+    # 4. Convert compressed k-space back to image domain
     imgs_rec = sp.ifft(compressed_kspace_quantized, axes=(-2, -1))  # (K_pca, H, W)
     
     return imgs_rec, total_bits
 
-def run_pca_experiment():
+def run_pca_experiment(use_waterfilling):
     imgs = load_imgs()
-    ref_img_path = os.path.join("results", "refer0", "ref_image.pt")
+    ref_img_path = os.path.join("results", "reference", "ref_image.pt")
     print(f"Loading reference from {ref_img_path}...")
     try:
         ref_img = torch.load(ref_img_path).numpy()
@@ -174,12 +203,22 @@ def run_pca_experiment():
     accel_ratios = [1, 2, 4, 8, 16]
     
     # Sweep K
-    # N=64.
     Ks = [1, 2, 3, 4, 5, 6, 8, 10, 12, 14, 16, 20, 24, 28, 32, 48]
     quant_bits = 10
     
-    print("Starting PCA compression sweep...")
+    method_name = "Waterfilling" if use_waterfilling else "Uniform"
+    print(f"Starting PCA compression sweep (Method: {method_name})...")
     
+    # Determine directory/file names based on method
+    if use_waterfilling:
+        subdir_name = "uniform_coil_compression_waterfilling"
+        results_filename = "results_pca_waterfilling.pt"
+        rd_curve_filename = "pca_waterfilling_rd_curve"
+    else:
+        subdir_name = "uniform_coil_compression"
+        results_filename = "results_pca.pt"
+        rd_curve_filename = "pca_rd_curve"
+
     # Loop over acceleration ratios
     for R in accel_ratios:        
         print(f"\n{'='*60}")
@@ -188,16 +227,15 @@ def run_pca_experiment():
         
         # Generate Poisson mask with calibration region
         mask = get_poisson_mask((N, H, W), accel=R, calib=(32, 32), seed=0)
-        # mask shape: (1, H, W) or (H, W)
         if mask.ndim == 3:
             mask = mask[0]  # (H, W)
         
-        # Convert to k-space and apply mask
-        kspace = sp.fft(imgs, axes=(-2, -1))  # (N, H, W)
+        # Convert to k-space and apply mask(N, H, W)
+        kspace = sp.fft(imgs, axes=(-2, -1))
         kspace_undersampled = kspace * mask[None, :, :]  # Apply mask to all coils
         
         # Create output directory for this acceleration ratio
-        output_dir = os.path.join("results", "uniform_coil_compression", f"R{R}")
+        output_dir = os.path.join("results", "compression_result", subdir_name, f"R{R}")
         os.makedirs(output_dir, exist_ok=True)
         
         results = {'bpp': [], 'psnr': [], 'ssim': [], 'rank': [], 'R': []}
@@ -205,8 +243,10 @@ def run_pca_experiment():
         for K in Ks:
             print(f"\n--- K: {K} ---")
             
-            # Compress in k-space domain (pass undersampled k-space directly)
-            rec_imgs, bits = pca_compress_decompress(imgs, K, quant_bits, kspace_undersampled=kspace_undersampled)
+            # Compress in k-space domain
+            rec_imgs, bits = pca_compress_decompress(
+                imgs, K, quant_bits, kspace_undersampled=kspace_undersampled, waterfilling=use_waterfilling
+            )
             bpp = bits / num_pixels_total
             
             p, s = run_espirit_pipeline(rec_imgs, ref_img, verbose=False)
@@ -250,13 +290,18 @@ def run_pca_experiment():
             plt.close()
         
         # Save results for this acceleration ratio
-        torch.save(results, os.path.join(output_dir, "results_pca.pt"))
+        torch.save(results, os.path.join(output_dir, results_filename))
         
-        save_rd_curve(results, f"PCA (Uniform) R={R}", f"pca_rd_curve_R{R}.png", output_dir=output_dir)
+        curve_title = f"PCA ({method_name}) R={R}"
+        curve_filename = f"{rd_curve_filename}_R{R}.png"
+        save_rd_curve(results, curve_title, curve_filename, output_dir=output_dir)
         print(f"Saved results for R={R} to {output_dir}")
     
     print("Done.")
 
 if __name__ == "__main__":
-    run_pca_experiment()
-
+    parser = argparse.ArgumentParser(description="Uniform Coil Compression with optional Waterfilling")
+    parser.add_argument("--waterfilling", action="store_true", help="Enable waterfilling quantization")
+    args = parser.parse_args()
+    
+    run_pca_experiment(args.waterfilling)

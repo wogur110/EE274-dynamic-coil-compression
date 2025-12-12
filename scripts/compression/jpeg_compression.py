@@ -9,8 +9,9 @@ import matplotlib.pyplot as plt
 from tqdm import tqdm
 
 # Add parent directory to path (go up 1 level from scripts/ to EE274-dynamic-coil-compression/)
+# Add parent directory to path (go up 2 levels from scripts/compression/ to EE274-dynamic-coil-compression/)
 script_dir = os.path.dirname(os.path.abspath(__file__))
-project_root = os.path.dirname(script_dir)
+project_root = os.path.dirname(os.path.dirname(script_dir))
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
@@ -131,7 +132,7 @@ def run_jpeg_experiment(quant_bits=8):
     """
     # Load data
     imgs = load_imgs()
-    ref_img_path = os.path.join("results", "refer0", "ref_image.pt")
+    ref_img_path = os.path.join("results", "reference", "ref_image.pt")
     
     print(f"Loading reference from {ref_img_path}...")
     ref_img = torch.load(ref_img_path)
@@ -177,7 +178,7 @@ def run_jpeg_experiment(quant_bits=8):
         mosaic_imag = tile_images(imgs_imag)
         
         # Create output directory for this acceleration ratio
-        output_dir = os.path.join("results", "refer1a_jpeg_compression", f"R{R}")
+        output_dir = os.path.join("results", "compression_result", "jpeg_compression", f"R{R}")
         os.makedirs(output_dir, exist_ok=True)
         
         results = {'bpp': [], 'psnr': [], 'ssim': [], 'quality': [], 'quant_bits': [], 'R': []}

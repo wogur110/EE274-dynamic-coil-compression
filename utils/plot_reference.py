@@ -4,7 +4,7 @@ import matplotlib.pyplot as plt
 import os
 
 def plot_results():
-    input_dir = os.path.join("results", "refer0")
+    input_dir = os.path.join("results", "reference")
     output_dir = input_dir
     os.makedirs(output_dir, exist_ok=True)
 

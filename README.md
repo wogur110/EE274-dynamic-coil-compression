@@ -1,6 +1,7 @@
 # MRI Coil Compression Methods - Rate-Distortion Analysis
 
-This repository implements and compares various compression methods for multi-coil MRI data, evaluating their rate-distortion performance using PSNR and SSIM metrics computed on magnitude images.
+This repository implements and compares various compression methods for multi-coil MRI data, evaluating their rate-distortion performance using PSNR and SSIM metrics computed on reconstructed images.
+We also propose a **Dynamic K-space-aware Coil Compression** method (with waterfilling) that yields a superior Pareto frontier, significantly outperforming JPEG, DCT, and Uniform PCA baselines.
 
 ## Environment Setup
 
@@ -34,11 +35,11 @@ python run_all.py
 ```
 
 This will execute:
-1. Reference image generation (refer0)
-2. JPEG compression (refer1a)
-3. DCT compression (refer1b)
-4. FFT/VD Poisson undersampling (refer1c)
-5. Uniform PCA coil compression (uniform_coil_compression)
+1. Reference image generation (0_generate_reference)
+2. JPEG compression
+3. DCT compression
+4. Uniform PCA coil compression (Regular & Waterfilling)
+5. Dynamic Coil Compression (Regular & Waterfilling) - including hyperparameter search and optimal runs
 
 ### Run Individual Experiments
 
@@ -46,19 +47,30 @@ You can also run individual scripts (no PYTHONPATH setup needed):
 
 ```bash
 # Generate reference image
-python scripts/refer0_generate_reference.py
+python scripts/0_generate_reference.py
 
 # JPEG compression
-python scripts/refer1a_jpeg_compression.py
+python scripts/compression/jpeg_compression.py
 
 # DCT compression
-python scripts/refer1b_DCT_compression.py
-
-# FFT/VD Poisson compression
-python scripts/refer1c_FFT_compression.py
+python scripts/compression/DCT_compression.py
 
 # Uniform PCA compression
-python scripts/uniform_coil_compression.py
+python scripts/compression/uniform_coil_compression.py
+# Uniform PCA compression (Waterfilling)
+python scripts/compression/uniform_coil_compression.py --waterfilling
+
+# Dynamic Coil Compression (Generate sweep data)
+python scripts/compression/dynamic_coil_compression.py
+python scripts/compression/dynamic_coil_compression.py --waterfilling
+
+# Dynamic Coil Compression (Find Optimal Hyperparameters)
+python scripts/compression/find_optimal_hyperparameters_for_dcc.py
+python scripts/compression/find_optimal_hyperparameters_for_dcc.py --waterfilling
+
+# Dynamic Coil Compression (Run Optimal)
+python scripts/compression/run_optimal_dynamic_compression.py
+python scripts/compression/run_optimal_dynamic_compression.py --waterfilling
 ```
 
 ### Generate Rate-Distortion Curves
@@ -69,11 +81,11 @@ To plot the combined rate-distortion curves for all methods:
 python plot_rd_all.py
 ```
 
-This generates `results/rd_curve_references.png` with separate plots for PSNR and SSIM.
+This generates plots in `results/plot/`.
 
 ## Method Descriptions
 
-### refer0: Reference Image Generation
+### 0_generate_reference: Reference Image Generation
 
 **Purpose**: Generates the ground truth reference image for evaluation.
 
@@ -90,8 +102,8 @@ This generates `results/rd_curve_references.png` with separate plots for PSNR an
 - Normalizes the final image
 
 **Output**: 
-- `results/refer0/ref_image.pt`: Reference combined image
-- `results/refer0/sensitivity_maps.pt`: Estimated sensitivity maps
+- `results/reference/ref_image.pt`: Reference combined image
+- `results/reference/sensitivity_maps.pt`: Estimated sensitivity maps
 
 **Key Parameters**:
 - Calibration region: 32×32 center k-space
@@ -100,7 +112,7 @@ This generates `results/rd_curve_references.png` with separate plots for PSNR an
 
 ---
 
-### refer1a: JPEG Compression
+### jpeg_compression: JPEG Compression
 
 **Purpose**: Baseline JPEG compression [(Pennebaker & Mitchell, 1992)](https://ieeexplore.ieee.org/document/210764) applied to coil images.
 
@@ -115,7 +127,7 @@ This generates `results/rd_curve_references.png` with separate plots for PSNR an
 - JPEG quality: [1, 5, 10, 15, 20, 30, 40, 50, 60, 70, 80, 85, 90, 95, 98, 100]
 
 **Output**: 
-- `results/refer1a_jpeg_compression/results_jpeg.pt`: Rate-distortion results
+- `results/compression_result/jpeg_compression/results_jpeg.pt`: Rate-distortion results
 - Individual reconstructed images for each quality setting
 
 **Characteristics**:
@@ -126,13 +138,13 @@ This generates `results/rd_curve_references.png` with separate plots for PSNR an
 
 ---
 
-### refer1b: DCT Compression (Water-Filling)
+### DCT_compression: DCT Compression
 
 **Purpose**: 2D Discrete Cosine Transform compression with magnitude-based coefficient selection.
 
 **Method**:
 - Applies 2D DCT to real and imaginary components separately
-- Performs global magnitude-based thresholding (water-filling)
+- Performs global magnitude-based thresholding
 - Keeps top-k DCT coefficients by magnitude across all coils
 - Quantizes and compresses remaining coefficients using zlib
 - Reconstructs via inverse DCT
@@ -142,7 +154,7 @@ This generates `results/rd_curve_references.png` with separate plots for PSNR an
 - Quantization bits: 9
 
 **Output**: 
-- `results/refer1b_dct_compression/results_dct.pt`: Rate-distortion results
+- `results/compression_result/dct_compression/results_dct.pt`: Rate-distortion results
 
 **Characteristics**:
 - Frequency-domain compression
@@ -150,36 +162,6 @@ This generates `results/rd_curve_references.png` with separate plots for PSNR an
 - Good performance at medium bit rates
 - Preserves important frequency components
 
----
-
-### refer1c: FFT Compression (VD Poisson Undersampling)
-
-**Purpose**: Variable-density Poisson disc undersampling in k-space.
-
-**Method**:
-- Converts coil images to k-space
-- Generates variable-density Poisson disc sampling masks
-- Samples k-space according to mask
-- Quantizes and compresses sampled k-space values
-- Compresses sampling mask using zlib
-- Reconstructs via zero-filled IFFT and ESPIRiT
-
-**Hyperparameters**:
-- Acceleration factors: [1, 1.5, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 14]
-- Quantization bits: 9
-- Calibration region: 32×32 (always fully sampled)
-
-**Output**: 
-- `results/refer1c_fft_compression/results_fft.pt`: Rate-distortion results
-
-**Characteristics**:
-- Works directly in k-space (native MRI domain)
-- Variable-density sampling preserves center k-space
-- ESPIRiT reconstruction handles aliasing
-- Good performance at low to medium bit rates
-- Natural for MRI acquisition simulation
-
----
 
 ### uniform_coil_compression: PCA-Based Uniform Compression
 
@@ -194,76 +176,80 @@ This generates `results/rd_curve_references.png` with separate plots for PSNR an
 - Quantizes and compresses PCA coefficients
 - Stores PCA basis vectors (overhead)
 - Reconstructs via inverse PCA transform
+- **Waterfilling Variant**: An optional bit allocation strategy where quantization precision is scaled based on the singular values (waterfilling), implemented with the option '--waterfilling'.
 
 **Hyperparameters**:
 - PCA rank (K): [1, 2, 3, 4, 5, 6, 8, 10, 12, 14, 16, 20, 24, 28, 32]
 - Quantization bits: 8
 
 **Output**: 
-- `results/uniform_coil_compression/results_pca.pt`: Rate-distortion results
+- `results/compression_result/uniform_coil_compression/results_pca.pt`: Rate-distortion results
 
 **Characteristics**:
 - Exploits correlation across coils
 - Global basis shared across all spatial locations
-- Excellent performance at medium to high bit rates
 - Basis overhead becomes significant at low ranks
-- Best quality among tested methods at high bit rates
+- Outperforms two baselines (JPEG, DCT), confirming the importance of inter-coil correlations
 
 ---
 
-### dynamic_coil_compression: Dynamic Band-Wise FFT+PCA
+### dynamic_coil_compression: Dynamic Coil Compression
 
-**Status**: ⚠️ **Still Ongoing** - Under active development
+**Purpose**: Adaptive compression using PCA coil compression followed by variable-radius k-space masking (corner cutting) per virtual coil.
 
-**Purpose**: Adaptive compression using frequency-band-dependent PCA ranks.
+**Method**:
+- **PCA Stage**: Applies a global PCA basis (derived from calibration data) to decouple coils into virtual coils.
+- **Dynamic Masking**: Applies a circular mask to each virtual coil in k-space.
+  - The radius of the mask is determined by the virtual coil's importance (singular value).
+  - High-energy virtual coils keep more high-frequency content (larger radius).
+  - Low-energy virtual coils are aggressively filtered (smaller radius).
+- **Waterfilling Variant**: An optional bit allocation strategy where quantization precision is scaled based on the singular values (waterfilling), implemented with the option '--waterfilling'.
 
-**Proposed Method**:
-- Divides k-space into radial frequency bands (low, mid, high)
-- Applies different PCA ranks to each band
-- Low frequencies: higher rank (more components)
-- High frequencies: lower rank (fewer components)
-- Adapts compression to signal characteristics
+**Hyperparameters**:
+- PCA rank (K): Adaptive (grid search in `find_optimal_hyperparameters_for_dcc.py`)
+- Cut Ratio: Controls how quickly mask radius decays with singular value rank.
 
-**Expected Characteristics**:
-- Better rate-distortion than uniform PCA
-- Adaptive to frequency content
-- More complex implementation
+**Output**: 
+- `results/compression_result/dynamic_coil_compression/`: Raw sweep results
+- `results/compression_result/dynamic_coil_compression_waterfilling/`: Raw waterfilling results
+- `results/compression_result/dynamic_coil_compression/optimal/`: Optimal results after hyperparameter search
+
+**Characteristics**:
+- optimized to preserve energy where it matters most (principal components).
+- **Dynamic k-space Masking and Waterfilling** push the performance further. By adapting to k-space energy, they yield higher SSIM at lower bit rates than the Coil Decoupling baseline.
 
 ---
 
 ## Rate-Distortion Results
 
-Below is an example of the generated rate–distortion curves comparing all reference methods:
+Results are saved in `results/plot/` as .png files.
 
-<p align="center">
-  <img src="rd_curve_references.png" alt="Rate-Distortion Curves" width="600"/>
-</p>
-
-The rate–distortion curves (`rd_curve_references.png`) compare all methods using:
+The rate–distortion curves compare all methods using:
 
 - **X-axis**: Bits per complex coil pixel (bpp)
-- **Y-axis (left)**: PSNR (dB) on ESPIRiT-reconstructed complex images
-- **Y-axis (right)**: SSIM on ESPIRiT-reconstructed complex images
+- **Y-axis**: PSNR (dB) or SSIM (if specified)
 
 ### Key Observations
 
-1. **Uniform PCA coil compression**  
-   - Consistently outperforms all three non-PCA baselines across the entire bit-rate range.  
-   - For a given bit rate, it achieves the highest SSIM (and PSNR), confirming that explicitly modeling coil correlations with a global PCA basis is highly effective for multi-coil compression.
-
-2. **DCT water-filling**  
-   - Strongest among the non-PCA baselines at medium and high bit rates.  
-   - Outperforms JPEG in this regime by selecting the largest DCT coefficients globally across coils.
-
-3. **VD Poisson FFT**  
-   - Broadly comparable to DCT water-filling across low–to–medium bit rates.  
-   - Operates directly in k-space and pairs naturally with ESPIRiT reconstruction, but is still dominated by uniform PCA in the current evaluation.
-
-4. **JPEG on real/imag mosaics**  
+1. **JPEG compression**  
    - Serves as a simple baseline and sanity check.  
    - Weaker than DCT at moderate and high bit rates, but becomes competitive and often the strongest among the non-PCA methods at very low bit rates.
 
-Overall, these results validate the evaluation pipeline and show that **coil-aware compression (uniform PCA)** is a strong and effective baseline, motivating the development of a more flexible, k-space–aware dynamic coil compression scheme.
+
+2. **DCT transform compression**  
+   - Strongest among the non-PCA baselines at medium and high bit rates.  
+   - Outperforms JPEG in this regime by selecting the largest DCT coefficients globally across coils.
+
+
+3. **Coil Decoupling (PCA-based uniform coil compression)**  
+   - Consistently outperforms two non-PCA baselines (JPEG, DCT) across the entire bit-rate range.  
+   - For a given bit rate, it achieves the highest SSIM (and PSNR), confirming that explicitly modeling coil correlations with a global PCA basis is highly effective for multi-coil MRI compression.
+
+4. **Dynamic Coil Compression**
+   - Dynamic k-space Masking and Waterfilling push the performance further.
+   - By adapting to k-space energy, they yield higher reconstruction quality at lower bit rates than Coil Decoupling baseline.
+
+Overall, the proposed **Dynamic K-space-aware Coil Compression with waterfilling** method outperforms all baselines, including JPEG, DCT, and Coil Decoupling.
 
 
 ## File Structure
@@ -274,23 +260,29 @@ EE274_dynamic_coil_compression/
 ├── run_all.py                 # Main script to run all experiments
 ├── plot_rd_all.py            # Generate combined RD curves
 ├── scripts/
-│   ├── refer0_generate_reference.py
-│   ├── refer1a_jpeg_compression.py
-│   ├── refer1b_DCT_compression.py
-│   ├── refer1c_FFT_compression.py
-│   ├── uniform_coil_compression.py
-│   └── dynamic_coil_compression.py  # Work in progress
+│   ├── 0_generate_reference.py
+│   ├── scripts_for_visualization.ipynb
+│   └── compression/
+│       ├── jpeg_compression.py
+│       ├── DCT_compression.py
+│       ├── uniform_coil_compression.py
+│       ├── dynamic_coil_compression.py
+│       ├── find_optimal_hyperparameters_for_dcc.py
+│       └── run_optimal_dynamic_compression.py
 ├── utils/
 │   ├── mri_utils.py           # MRI processing utilities
 │   ├── espirit_torch.py       # ESPIRiT implementation
 │   └── plot_utils.py          # Plotting utilities
 └── results/
-    ├── refer0/                # Reference images
-    ├── refer1a_jpeg_compression/
-    ├── refer1b_dct_compression/
-    ├── refer1c_fft_compression/
-    ├── uniform_coil_compression/
-    └── rd_curve_references.png # Combined RD plot
+    ├── reference/             # Reference images
+    ├── compression_result/
+    │   ├── jpeg_compression/
+    │   ├── dct_compression/
+    │   ├── uniform_coil_compression/
+    │   ├── uniform_coil_compression_waterfilling/
+    │   ├── dynamic_coil_compression/
+    │   └── dynamic_coil_compression_waterfilling/
+    └── plot/                  # Combined RD plots as .png files
 ```
 
 ## Notes
