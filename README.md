@@ -105,6 +105,9 @@ This generates plots in `results/plot/`.
 - `results/reference/ref_image.pt`: Reference combined image
 - `results/reference/sensitivity_maps.pt`: Estimated sensitivity maps
 
+![Reference Image](sample_results/reference/ref_image_plot.png)
+![Sensitivity Maps](sample_results/reference/sensitivity_maps_plot.png)
+
 **Key Parameters**:
 - Calibration region: 32×32 center k-space
 - ESPIRiT threshold: 0.02
@@ -218,11 +221,15 @@ This generates plots in `results/plot/`.
 - optimized to preserve energy where it matters most (principal components).
 - **Dynamic k-space Masking and Waterfilling** push the performance further. By adapting to k-space energy, they yield higher SSIM at lower bit rates than the Coil Decoupling baseline.
 
+![Dynamic Coil Compression Reconstruction](sample_results/compression_result/dynamic_coil_compression_waterfilling/optimal/R1/rec_K48_cut0.80.png)
+
 ---
 
 ## Rate-Distortion Results
 
 Results are saved in `results/plot/` as .png files.
+
+![Rate-Distortion Curve (R=1)](sample_results/plot/rd_curve_R1.png)
 
 The rate–distortion curves compare all methods using:
 
