@@ -3,6 +3,8 @@
 This repository implements and compares various compression methods for multi-coil MRI data, evaluating their rate-distortion performance using PSNR and SSIM metrics computed on reconstructed images.
 We also propose a **Dynamic K-space-aware Coil Compression** method (with waterfilling) that yields a superior Pareto frontier, significantly outperforming JPEG, DCT, and Uniform PCA baselines.
 
+For more details, please refer to the [Final Report](EE274_Project_Final_Report.pdf).
+
 ## Environment Setup
 
 ### Prerequisites
@@ -105,6 +107,7 @@ This generates plots in `results/plot/`.
 - `results/reference/ref_image.pt`: Reference combined image
 - `results/reference/sensitivity_maps.pt`: Estimated sensitivity maps
 
+**Reference Image and Sensitivity Maps**:
 ![Reference Image](sample_results/reference/ref_image_plot.png)
 ![Sensitivity Maps](sample_results/reference/sensitivity_maps_plot.png)
 
@@ -221,6 +224,7 @@ This generates plots in `results/plot/`.
 - optimized to preserve energy where it matters most (principal components).
 - **Dynamic k-space Masking and Waterfilling** push the performance further. By adapting to k-space energy, they yield higher SSIM at lower bit rates than the Coil Decoupling baseline.
 
+**Sample Reconstruction Result using Dynamic Coil Compression with Waterfilling (R = 1)**:
 ![Dynamic Coil Compression Reconstruction](sample_results/compression_result/dynamic_coil_compression_waterfilling/optimal/R1/rec_K48_cut0.80.png)
 
 ---
@@ -229,6 +233,7 @@ This generates plots in `results/plot/`.
 
 Results are saved in `results/plot/` as .png files.
 
+**Sample Rate-Distortion Curve (R = 1)**:
 ![Rate-Distortion Curve (R=1)](sample_results/plot/rd_curve_R1.png)
 
 The rate–distortion curves compare all methods using:
